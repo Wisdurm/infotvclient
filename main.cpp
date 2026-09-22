@@ -1,10 +1,16 @@
 #include "SDL3/SDL_events.h"
+#include "SDL3/SDL_init.h"
+#include "SDL3/SDL_pixels.h"
+#include "SDL3/SDL_render.h"
+#include "SDL3/SDL_surface.h"
 #include "SDL3/SDL_video.h"
+#include <SDL3_ttf/SDL_ttf.h>
 #include <ixwebsocket/IXWebSocketMessage.h>
 #include <ixwebsocket/IXWebSocketMessageType.h>
 #include <ixwebsocket/IXNetSystem.h>
 #include <ixwebsocket/IXWebSocket.h>
 #include <ixwebsocket/IXUserAgent.h>
+#include <string>
 #define SDL_MAIN_USE_CALLBACKS 1  /* use the callbacks instead of main() */
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -14,23 +20,57 @@
 #include <functional>
 #include <iostream>
 #include <cstring>
+#include <memory>
 
 static SDL_Window *window = NULL;
 static SDL_Renderer *renderer = NULL;
+static TTF_Font *font = NULL;
 
 static const std::string url = "ws://10.246.12.118:3000/ws";
 static ix::WebSocket webSocket;
 static std::forward_list<std::string> log;
-
-using Work = int;
-
-static std::unordered_map<std::string, Work> students;
 
 void logs(std::string msg)
 {
 	log.push_front(msg);
 	SDL_Log("%s", msg.c_str());
 }
+
+class Student {
+public:
+	SDL_Texture* texture;
+	std::string name;
+	int work;
+
+	Student(std::string name) : name(name), work(0)
+	{
+		const std::pair<std::string*, SDL_Texture**> data =
+			std::pair{&name, &texture};
+		SDL_RunOnMainThread([](void* userdata){
+			auto& [name, texture] =
+				*reinterpret_cast<std::pair<std::string*,
+							    SDL_Texture**>*>(userdata);
+
+			auto text = TTF_RenderText_Blended(
+				font, name->c_str(), name->size(),
+				{255,255,255, SDL_ALPHA_OPAQUE});
+			if (text) {
+				*texture = SDL_CreateTextureFromSurface(renderer,text);
+				SDL_DestroySurface(text);
+				if (!(*texture))
+					logs(SDL_GetError());
+			}
+		}, (void*)&data, true);
+	}
+
+	~Student()
+	{
+		if (texture)
+			SDL_DestroyTexture(texture);
+	}
+};
+
+static std::unordered_map<int, std::unique_ptr<Student>> students;
 
 struct JsonWrapper {
 	json_value_s* root;
@@ -73,23 +113,35 @@ void onMessage(const ix::WebSocketMessagePtr& msg)
 			return;
 		}
 		// Get students
-		auto* students = json_value_as_array(
+		auto* values = json_value_as_array(
 			payload->value);
-		auto* it = students->start;
+		auto* it = values->start;
 		while (it != NULL) {
 			auto* obj = json_value_as_object(
 				it->value);
-			auto* name = obj->start->next->next;
-			if (std::strcmp(name->name->string, "name") != 0) {
+			// Id
+			auto* idv = obj->start;
+			if (std::strcmp(idv->name->string, "id") != 0)
 				return;
-			}
-			const std::string str = json_value_as_string(
-				name->value)->string;
-			logs("NAME!!: " + str);
+			const int id = std::stoi(
+				json_value_as_number(idv->value)->number);
+			// Name
+			auto* namev = idv->next->next;
+			if (std::strcmp(namev->name->string, "name") != 0)
+				return;
+			const std::string name = json_value_as_string(
+				namev->value)->string;
+			// Status
+			auto* statusv = namev->next;
+			if (std::strcmp(statusv->name->string, "status") != 0)
+				return;
+			const bool status = (json_value_is_true(statusv->value))
+				? true : false;
+			// Add object
+			students.insert({id, std::make_unique<Student>(name)});
 			// kikkeli
 			it = it->next;
 		}
-
 		logs("Parsed succesfully!");
 		break;
 	}
@@ -114,7 +166,16 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 	if (!SDL_CreateWindowAndRenderer(
 		    "Hello World", 800, 600,
 		    SDL_WINDOW_RESIZABLE, &window, &renderer)) {
-		SDL_Log("Couldn't create window and renderer: %s", SDL_GetError());
+		logs(SDL_GetError());
+		return SDL_APP_FAILURE;
+	}
+	if (!TTF_Init()) {
+		logs(SDL_GetError());
+		return SDL_APP_FAILURE;
+	}
+	font = TTF_OpenFont("LiberationSans-Regular.ttf", 20);
+	if (!font) {
+		logs(SDL_GetError());
 		return SDL_APP_FAILURE;
 	}
 	// Connect to a server
@@ -126,13 +187,6 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 	webSocket.setOnMessageCallback(std::function<void (const ix::WebSocketMessagePtr&)>(onMessage));
 	// Start thread
 	webSocket.start();
-	students.emplace("Jaakko", 12);
-	students.emplace("Jorma", 1);
-	students.emplace("Asko", 12);
-	students.emplace("Jerma", 1);
-	students.emplace("Veeti", 12);
-	students.emplace("Jouko", 1);
-
 	return SDL_APP_CONTINUE;
 }
 
@@ -149,9 +203,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 			break;
 		}
 		default: {
-			std::string n = students.begin()->first;
-			n += static_cast<char>(event->key.raw);
-			students.emplace(n, 12);
+			students.insert({event->key.raw,
+					std::make_unique<Student>("Jääskän poika")});
 			break;
 		}
 		}
@@ -183,16 +236,17 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 		const int nStudents = students.size();
 		const float tHeight = SDL_ceil(nStudents / 3.f) * height * 1.2f;
 		int i = 0;
-		for (auto const& [name, work] :
+		for (auto const& [id, data] :
 			     students) {
-			const SDL_FRect rect = {
+			const SDL_FRect dstrect = {
 				(width*0.8f) + ((i%3) * width * 1.2f),
 				((screenHeight - tHeight) / 2) +
 				(static_cast<float>(SDL_floor(i/3.f))
 				 * height * 1.2f),
 				width, height
 			};
-			SDL_RenderRect(renderer, &rect);
+			SDL_RenderTexture(renderer, data->texture,
+					  nullptr, &dstrect);
 			i++;
 		}
 	}
@@ -204,6 +258,9 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 /* This function runs once at shutdown. */
 void SDL_AppQuit(void *appstate, SDL_AppResult result)
 {
+	if (font)
+		TTF_CloseFont(font);
+	TTF_Quit();
 	webSocket.close();
 	webSocket.stop();
 }

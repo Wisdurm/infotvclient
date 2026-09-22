@@ -21,8 +21,16 @@ FetchContent_Declare(
   GIT_PROGRESS TRUE
 )
 FetchContent_MakeAvailable(SDL3)
+FetchContent_Declare(
+  SDL3_ttf
+  GIT_REPOSITORY https://github.com/libsdl-org/SDL_ttf/
+  GIT_TAG main
+  GIT_SHALLOW TRUE
+  GIT_PROGRESS TRUE
+)
+FetchContent_MakeAvailable(SDL3_ttf)
 # Build
 add_executable(infotvclient
   main.cpp
 )
-target_link_libraries(infotvclient PRIVATE SDL3::SDL3 ixwebsocket)
+target_link_libraries(infotvclient PRIVATE SDL3::SDL3 SDL3_ttf::SDL3_ttf ixwebsocket)
