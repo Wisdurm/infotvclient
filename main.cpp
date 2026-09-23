@@ -17,14 +17,17 @@
 #include "json.h"
 #include <forward_list>
 #include <unordered_map>
-#include <functional>
-#include <iostream>
 #include <cstring>
 #include <memory>
+#include <mutex>
+
+#include <iostream>
 
 static SDL_Window *window = NULL;
 static SDL_Renderer *renderer = NULL;
 static TTF_Font *font = NULL;
+
+static std::mutex mutex;
 
 static const std::string url = "ws://10.246.12.118:3000/ws";
 static ix::WebSocket webSocket;
@@ -36,23 +39,28 @@ void logs(std::string msg)
 	SDL_Log("%s", msg.c_str());
 }
 
-class Student {
-public:
-	SDL_Texture* texture;
-	std::string name;
-	int work;
+class TextWrapper
+{
+	inline static std::unordered_map<std::string, SDL_Texture*> cache;
+	std::string text;
 
-	Student(std::string name) : name(name), work(0)
+public:
+	TextWrapper(std::string text) : text(text)
 	{
+		// If string already rendered
+		if (TextWrapper::cache.find(text) != TextWrapper::cache.end())
+			return;
+		// Otherwise
+		SDL_Texture* texture;
 		const std::pair<std::string*, SDL_Texture**> data =
-			std::pair{&name, &texture};
+			std::pair{&text, &texture};
 		SDL_RunOnMainThread([](void* userdata){
-			auto& [name, texture] =
+			auto& [msg, texture] =
 				*reinterpret_cast<std::pair<std::string*,
 							    SDL_Texture**>*>(userdata);
 
 			auto text = TTF_RenderText_Blended(
-				font, name->c_str(), name->size(),
+				font, msg->c_str(), msg->size(),
 				{255,255,255, SDL_ALPHA_OPAQUE});
 			if (text) {
 				*texture = SDL_CreateTextureFromSurface(renderer,text);
@@ -61,13 +69,39 @@ public:
 					logs(SDL_GetError());
 			}
 		}, (void*)&data, true);
+		logs("Rendered");
+		TextWrapper::cache.insert({text, texture});
 	}
 
-	~Student()
+	SDL_Texture* GetTexture()
 	{
-		if (texture)
-			SDL_DestroyTexture(texture);
+		return TextWrapper::cache.at(text);
 	}
+
+	static void CleanCache()
+	{
+		SDL_RunOnMainThread([](void* userdata){
+			auto& cache = *reinterpret_cast<
+				std::unordered_map<std::string, SDL_Texture*>*
+				>(userdata);
+			for (auto& [_,texture] : TextWrapper::cache) {
+				SDL_DestroyTexture(texture);
+			}
+		} , &TextWrapper::cache, true);
+		TextWrapper::cache.clear();
+	}
+};
+
+struct Student {
+	TextWrapper texture;
+	const std::string name;
+	const int work;
+
+	Student(std::string name, int work) :
+		name(name),
+		work(work),
+		texture(TextWrapper(name))
+	{ }
 };
 
 static std::unordered_map<int, std::unique_ptr<Student>> students;
@@ -116,6 +150,9 @@ void onMessage(const ix::WebSocketMessagePtr& msg)
 		auto* values = json_value_as_array(
 			payload->value);
 		auto* it = values->start;
+		// Wait until rendered before modifying it
+		std::lock_guard<std::mutex> _(mutex);
+		students.clear();
 		while (it != NULL) {
 			auto* obj = json_value_as_object(
 				it->value);
@@ -138,7 +175,7 @@ void onMessage(const ix::WebSocketMessagePtr& msg)
 			const bool status = (json_value_is_true(statusv->value))
 				? true : false;
 			// Add object
-			students.insert({id, std::make_unique<Student>(name)});
+			students.insert({id, std::make_unique<Student>(name, 0)});
 			// kikkeli
 			it = it->next;
 		}
@@ -184,7 +221,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 	// Setup a callback to be fired
 	// (in a background thread, watch out for race conditions !)
 	// when a message or an event (open, close, error) is received
-	webSocket.setOnMessageCallback(std::function<void (const ix::WebSocketMessagePtr&)>(onMessage));
+	webSocket.setOnMessageCallback(onMessage);
 	// Start thread
 	webSocket.start();
 	return SDL_APP_CONTINUE;
@@ -204,7 +241,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 		}
 		default: {
 			students.insert({event->key.raw,
-					std::make_unique<Student>("Jääskän poika")});
+					std::make_unique<Student>("Jääskän poika", 2)});
 			break;
 		}
 		}
@@ -236,18 +273,25 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 		const int nStudents = students.size();
 		const float tHeight = SDL_ceil(nStudents / 3.f) * height * 1.2f;
 		int i = 0;
-		for (auto const& [id, data] :
-			     students) {
-			const SDL_FRect dstrect = {
-				(width*0.8f) + ((i%3) * width * 1.2f),
-				((screenHeight - tHeight) / 2) +
-				(static_cast<float>(SDL_floor(i/3.f))
-				 * height * 1.2f),
-				width, height
-			};
-			SDL_RenderTexture(renderer, data->texture,
-					  nullptr, &dstrect);
-			i++;
+		// Don't modify students while rendering it
+		if (mutex.try_lock()) {
+			for (auto const& [id, data] :
+				     students) {
+				const SDL_FRect dstrect = {
+					(width*0.8f) + ((i%3) * width * 1.2f),
+					((screenHeight - tHeight) / 2) +
+					(static_cast<float>(SDL_floor(i/3.f))
+					 * height * 1.2f),
+					width, height
+				};
+				SDL_RenderTexture(renderer, data->texture.GetTexture(),
+						  nullptr, &dstrect);
+				i++;
+			}
+			mutex.unlock();
+		} else {
+			SDL_SetRenderDrawColor(renderer, 255, 0, 255, 255);
+			SDL_RenderClear(renderer);
 		}
 	}
 	// Present
@@ -258,6 +302,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 /* This function runs once at shutdown. */
 void SDL_AppQuit(void *appstate, SDL_AppResult result)
 {
+	TextWrapper::CleanCache();
 	if (font)
 		TTF_CloseFont(font);
 	TTF_Quit();
