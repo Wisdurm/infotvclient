@@ -31,6 +31,6 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(SDL3_ttf)
 # Build
 add_executable(infotvclient
-  main.cpp
+  src/main.cpp
 )
 target_link_libraries(infotvclient PRIVATE SDL3::SDL3 SDL3_ttf::SDL3_ttf ixwebsocket)

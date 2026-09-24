@@ -1,7 +1,6 @@
 #include "json.h"
 #include <stdexcept>
 #include <string>
-#include <exception>
 #include <vector>
 
 struct JsonObjectElementWrapper {

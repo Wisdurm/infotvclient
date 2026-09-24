@@ -1,3 +1,4 @@
+#include <SDL3_ttf/SDL_ttf.h>
 #include "SDL3/SDL_events.h"
 #include "SDL3/SDL_init.h"
 #include "SDL3/SDL_oldnames.h"
@@ -5,7 +6,6 @@
 #include "SDL3/SDL_render.h"
 #include "SDL3/SDL_surface.h"
 #include "SDL3/SDL_video.h"
-#include <SDL3_ttf/SDL_ttf.h>
 #include <algorithm>
 #include <cstddef>
 #include <ixwebsocket/IXWebSocketMessage.h>
@@ -27,14 +27,14 @@
 #include <format>
 #include <chrono>
 #include "json.hpp"
+#include "text.hpp"
 
 #include <iostream>
 
 static SDL_Window *window = NULL;
 static SDL_Renderer *renderer = NULL;
-static TTF_Font *font = NULL;
 
-static SDL_Texture* buffer;
+static SDL_Texture* renderBuffer;
 
 static SDL_Texture* blueBorder;
 static SDL_Texture* greyBorder;
@@ -50,76 +50,6 @@ void logs(std::string msg)
 	log.push_front(msg);
 	SDL_Log("%s", msg.c_str());
 }
-
-class TextWrapper
-{
-	inline static std::unordered_map<std::string, SDL_Texture*> cache;
-	const std::string text;
-	const SDL_Color colour;
-
-public:
-	TextWrapper(std::string text, SDL_Color colour) : text(text), colour(colour)
-	{
-		GenerateTexture();
-	}
-
-	void GenerateTexture() const
-	{
-		// If string already rendered
-		if (TextWrapper::cache.find(text) != TextWrapper::cache.end())
-			return;
-		// Otherwise
-		SDL_Texture* texture;
-		const std::tuple<std::string const*, SDL_Texture**, SDL_Color const*>
-			data = std::tuple{&text, &texture, &colour};
-		SDL_RunOnMainThread([](void* userdata){
-			auto& [msg,
-			       texture,
-			       colour] =
-				*reinterpret_cast<std::tuple<std::string const*,
-							     SDL_Texture**,
-							     SDL_Color*>*>(userdata);
-
-			auto text = TTF_RenderText_Blended(
-				font, msg->c_str(), msg->size(), *colour);
-			if (text) {
-				*texture = SDL_CreateTextureFromSurface(renderer,text);
-				SDL_DestroySurface(text);
-				if (!(*texture))
-					logs(SDL_GetError());
-			}
-		}, (void*)&data, true);
-		logs("Rendered");
-		TextWrapper::cache.insert({text, texture});
-	}
-
-	SDL_Texture* GetTexture() const
-	{
-		if (TextWrapper::cache.find(text) == TextWrapper::cache.end())
-			GenerateTexture();
-		return TextWrapper::cache.at(text);
-	}
-
-	// Periodic cleanup of unused textures
-	static void Cleanup()
-	{
-		// TODO
-	}
-
-	static void CleanCache()
-	{
-		SDL_RunOnMainThread([](void* userdata){
-			auto& cache = *reinterpret_cast<
-				std::unordered_map<std::string, SDL_Texture*>*
-				>(userdata);
-			for (auto& [_,texture] :
-				     TextWrapper::cache) {
-				SDL_DestroyTexture(texture);
-			}
-		} , &TextWrapper::cache, true);
-		TextWrapper::cache.clear();
-	}
-};
 
 struct Student {
 	const TextWrapper nameTexture;
@@ -239,6 +169,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 		logs(SDL_GetError());
 		return SDL_APP_FAILURE;
 	}
+	TextWrapper::renderer = renderer;
 	if (!TTF_Init()) {
 		logs(SDL_GetError());
 		return SDL_APP_FAILURE;
@@ -250,7 +181,6 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 	}
 	blueBorder = LoadBMP("blue.bmp");
 	greyBorder = LoadBMP("gray.bmp");
-
 	// Connect to a server
 	webSocket.setUrl(url);
 	logs("Connecting...");
@@ -282,6 +212,14 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 			break;
 		}
 		}
+	} else if (event->type == SDL_EVENT_WINDOW_RESIZED) {
+		int w, h;
+		SDL_GetWindowSize(SDL_GetWindowFromEvent(event), &w, &h);
+		if (renderBuffer)
+			SDL_DestroyTexture(renderBuffer);
+		renderBuffer =
+			SDL_CreateTexture(renderer, SDL_PIXELFORMAT_XRGB8888,
+					  SDL_TEXTUREACCESS_TARGET, w, h);
 	}
 	return SDL_APP_CONTINUE;
 }
@@ -289,28 +227,31 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 /* This function runs once per frame, and is the heart of the program. */
 SDL_AppResult SDL_AppIterate(void *appstate)
 {
-	// Background
-	SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-	SDL_RenderClear(renderer);
-	// Debug log
-	SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-	{
-		int i = 0;
-		for (auto const&  msg : log) {
-			SDL_RenderDebugText(renderer, 0, i*10, msg.c_str());
-			i++;
-		}
-	}
-	// Students
-	int screenWidth, screenHeight;
-	SDL_GetCurrentRenderOutputSize(renderer, &screenWidth, &screenHeight);
-	const float width = screenWidth / 5;
-	const float height = width / 2;
-	const int nStudents = students.size();
-	const float tHeight = SDL_ceil(nStudents / 3.f) * height * 1.2f;
-	int i = 0;
+	if (not renderBuffer)
+		return SDL_APP_CONTINUE;
 	// Don't modify students while rendering it
 	if (mutex.try_lock()) {
+		SDL_SetRenderTarget(renderer, renderBuffer);
+		// Background
+		SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+		SDL_RenderClear(renderer);
+		// Debug log
+		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+		{
+			int i = 0;
+			for (auto const&  msg : log) {
+				SDL_RenderDebugText(renderer, 0, i*10, msg.c_str());
+				i++;
+			}
+		}
+		// Students
+		int screenWidth, screenHeight;
+		SDL_GetCurrentRenderOutputSize(renderer, &screenWidth, &screenHeight);
+		const float width = screenWidth / 5;
+		const float height = width / 2;
+		const int nStudents = students.size();
+		const float tHeight = SDL_ceil(nStudents / 3.f) * height * 1.2f;
+		int i = 0;
 		for (auto const& [id, data] :
 			     students) {
 			const SDL_FRect borderRect = {
@@ -360,11 +301,10 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 			i++;
 		}
 		mutex.unlock();
-	} else {
-		SDL_SetRenderDrawColor(renderer, 255, 0, 255, 255);
-		SDL_RenderClear(renderer);
+		SDL_SetRenderTarget(renderer, nullptr);
 	}
 	// Present
+	SDL_RenderTexture(renderer, renderBuffer, nullptr, nullptr);
 	SDL_RenderPresent(renderer);
 	return SDL_APP_CONTINUE;
 }
