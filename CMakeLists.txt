@@ -3,7 +3,7 @@ include(FetchContent)
 project(infotvclient
   DESCRIPTION "Show student status on tv screen"
 )
-# set(CMAKE_CXX_STANDARD 2)
+set(CMAKE_CXX_STANDARD 23)
 # Libraries
 FetchContent_Declare(
   ixwebsocket
