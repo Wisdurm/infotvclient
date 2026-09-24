@@ -13,11 +13,12 @@
 #include <ixwebsocket/IXNetSystem.h>
 #include <ixwebsocket/IXWebSocket.h>
 #include <ixwebsocket/IXUserAgent.h>
+#include <stdexcept>
 #include <string>
+#include <vector>
 #define SDL_MAIN_USE_CALLBACKS 1  /* use the callbacks instead of main() */
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
-#include "json.h"
 #include <forward_list>
 #include <unordered_map>
 #include <cstring>
@@ -25,6 +26,7 @@
 #include <mutex>
 #include <format>
 #include <chrono>
+#include "json.hpp"
 
 #include <iostream>
 
@@ -32,7 +34,10 @@ static SDL_Window *window = NULL;
 static SDL_Renderer *renderer = NULL;
 static TTF_Font *font = NULL;
 
+static SDL_Texture* buffer;
+
 static SDL_Texture* blueBorder;
+static SDL_Texture* greyBorder;
 
 static std::mutex mutex;
 
@@ -118,103 +123,86 @@ public:
 
 struct Student {
 	const TextWrapper nameTexture;
-	TextWrapper remainingTexture;
+	const TextWrapper remainingTexture;
 	const std::string name;
+	const bool status;
 
-	Student(std::string name, int remaining) :
+	Student(std::string name, int remaining, bool status) :
 		name(name),
 		nameTexture(TextWrapper(name, {0,0,0,SDL_ALPHA_OPAQUE})),
 		remainingTexture([&remaining]{
 			auto time {std::chrono::seconds(remaining)};
 			return std::format("{:%H t %M min }", time);
-		}(), {100,100,100,SDL_ALPHA_OPAQUE})
+		}(), {100,100,100,SDL_ALPHA_OPAQUE}),
+		status(status)
 	{
 	}
 };
 
 static std::unordered_map<int, std::unique_ptr<Student>> students;
 
-struct JsonWrapper {
-	json_value_s* root;
 
-	JsonWrapper(std::string const& str)
-	{
-		logs("Luotu: " + str);
-		root = json_parse(str.c_str(), str.size());
-	}
-
-	~JsonWrapper()
-	{
-		logs("Vapautettu");
-		free(root);
-	}
-};
+void UpdateStudent(JsonValueWrapper value)
+{
+	const auto obj = JsonObjectWrapper(value);
+	// Id
+	auto idv = obj[0];
+	if (idv.name() != "id")
+		return;
+	const int id = int(JsonValueWrapper(idv.value()));
+	// Name
+	const auto namev = obj[2];
+	if (namev.name() != "name")
+		return;
+	const std::string name = std::string(JsonValueWrapper(namev.value()));
+	// Status
+	const auto statusv = obj[3];
+	if (statusv.name() != "status")
+		return;
+	const bool status =
+		std::string(JsonValueWrapper(statusv.value())) == "IN"
+		? true : false;
+	// Remaining time
+	const auto remainingv = obj[10];
+	if (remainingv.name() != "remaining")
+		return;
+	const int remaining = int(JsonValueWrapper(remainingv.value()));
+	// Add object
+	students.insert({id, std::make_unique<Student>(name, remaining, status)});
+}
 
 void onMessage(const ix::WebSocketMessagePtr& msg)
 {
 	switch (msg->type) {
 	case ix::WebSocketMessageType::Message: {
 		logs("Msg: " + msg->str);
+		// TODO: erorr hand
 		const JsonWrapper json(msg->str);
-		auto* object = json_value_as_object(json.root);
-		if (object == NULL or
-		    object->length != 2) {
+		const auto object = json.object();
+		const auto event = object[0];
+		if (event.name() != "event")
 			return;
-		}
-		auto* event = object->start;
-		if (std::strcmp(event->name->string, "event") != 0) {
+		const auto payload = object[1];
+		if (payload.name() != "payload")
 			return;
-		}
-		auto* evalue = json_value_as_string(
-			event->value);
-		if (std::strcmp(evalue->string, "students:update") != 0) {
-			return;
-		}
-		auto* payload = event->next;
-		if (std::strcmp(payload->name->string, "payload") != 0) {
-			return;
-		}
-		// Get students
-		auto* values = json_value_as_array(
-			payload->value);
-		auto* it = values->start;
-		// Wait until rendered before modifying it
-		std::lock_guard<std::mutex> _(mutex);
-		students.clear();
-		while (it != NULL) {
-			auto* obj = json_value_as_object(
-				it->value);
-			// Id
-			auto* idv = obj->start;
-			if (std::strcmp(idv->name->string, "id") != 0)
-				return;
-			// TODO: erorr hand
-			const int id = std::stoi(
-				json_value_as_number(idv->value)->number);
-			// Name
-			auto* namev = idv->next->next;
-			if (std::strcmp(namev->name->string, "name") != 0)
-				return;
-			const std::string name = json_value_as_string(
-				namev->value)->string;
-			// Status
-			auto* statusv = namev->next;
-			if (std::strcmp(statusv->name->string, "status") != 0)
-				return;
-			const bool status = (json_value_is_true(statusv->value))
-				? true : false;
-			// Remaining time
-			auto* remainingv =
-				statusv->next->next->next->next->next->next->next;
-			if (std::strcmp(remainingv->name->string, "remaining") != 0)
-				return;
-			// TODO: erorr hand
-			const int remaining = std::stoi(
-				json_value_as_number(remainingv->value)->number);
-			// Add object
-			students.insert({id, std::make_unique<Student>(name, remaining)});
-			// kikkeli
-			it = it->next;
+		const std::string eventName =
+			std::string(JsonValueWrapper(event.value()));
+		if (eventName == "students:update") {
+			// Get students
+			const auto values =
+				std::vector<JsonValueWrapper>(JsonValueWrapper(payload.value()));
+			// Wait until rendered before modifying it
+			std::lock_guard<std::mutex> _(mutex);
+			students.clear();
+			for (auto value : values) {
+				UpdateStudent(value);
+			}
+		} else if (eventName == "student:update") {
+			std::lock_guard<std::mutex> _(mutex);
+			UpdateStudent(JsonValueWrapper(payload.value()));
+		} else if (eventName == "student:new") {
+			std::lock_guard<std::mutex> _(mutex);
+			UpdateStudent(JsonValueWrapper(payload.value()));
 		}
 		logs("Parsed succesfully!");
 		break;
@@ -261,6 +249,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 		return SDL_APP_FAILURE;
 	}
 	blueBorder = LoadBMP("blue.bmp");
+	greyBorder = LoadBMP("gray.bmp");
 
 	// Connect to a server
 	webSocket.setUrl(url);
@@ -288,7 +277,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 		}
 		default: {
 			students.insert({event->key.raw,
-					std::make_unique<Student>("Jääskän poika", 2)});
+					std::make_unique<Student>
+					("Jääskän poika", 2, true)});
 			break;
 		}
 		}
@@ -299,7 +289,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 /* This function runs once per frame, and is the heart of the program. */
 SDL_AppResult SDL_AppIterate(void *appstate)
 {
-	// Clear
+	// Background
 	SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
 	SDL_RenderClear(renderer);
 	// Debug log
@@ -333,9 +323,14 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 			const auto nameTex = data->nameTexture.GetTexture();
 			const auto timeTex = data->remainingTexture.GetTexture();
 			// Border
-			SDL_RenderTexture9Grid(renderer, blueBorder, nullptr,
-					       12,12,12,12, 0,
-					       &borderRect);
+			if (data->status)
+				SDL_RenderTexture9Grid(renderer, blueBorder, nullptr,
+						       12,12,12,12, 0,
+						       &borderRect);
+			else
+				SDL_RenderTexture9Grid(renderer, greyBorder, nullptr,
+						       12,12,12,12, 0,
+						       &borderRect);
 
 			// Text
 			const float fontScale = screenWidth / 1600.f;
