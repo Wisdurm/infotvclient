@@ -4,6 +4,7 @@
 #include "SDL3/SDL_oldnames.h"
 #include "SDL3/SDL_pixels.h"
 #include "SDL3/SDL_render.h"
+#include "SDL3/SDL_stdinc.h"
 #include "SDL3/SDL_surface.h"
 #include "SDL3/SDL_video.h"
 #include <algorithm>
@@ -28,8 +29,6 @@
 #include <chrono>
 #include "json.hpp"
 #include "text.hpp"
-
-#include <iostream>
 
 static SDL_Window *window = NULL;
 static SDL_Renderer *renderer = NULL;
@@ -217,9 +216,9 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 			break;
 		}
 		default: {
-			students.insert({event->key.raw,
-					std::make_unique<Student>
-					("Jääskän poika", 2, true)});
+			students.insert(
+				{event->key.raw, std::make_unique<Student>
+				 ("Jääskän poika", 2, true)});
 			break;
 		}
 		}
@@ -272,6 +271,14 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 				return self(self, perRow+1);
 		};
 		const auto [perRow, width, height, tHeight, tWidth] = get(get,3);
+		// moi
+		const float x = SDL_fmod(SDL_GetTicks() / 1000., 8.f);
+		const float f = ((x < 2) ? 0 :
+				 (x < 4) ? SDL_sin((x-2)*(SDL_PI_F / 4)) :
+				 (x < 6) ? 1 :
+				 (x < 8) ? 1-SDL_sin((x+2)*(SDL_PI_F / 4)) :
+				 0) - 0.5;
+		const float scroll = f * SDL_max((tHeight - screenHeight) * 1.1,0);
 
 		int i = 0;
 		for (auto const& [id, data] :
@@ -281,7 +288,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 				startX + ((i%perRow) * width * 1.2f),
 				((screenHeight - tHeight) / 2) +
 				(static_cast<float>(SDL_floor(i/float(perRow)))
-				 * height * 1.2f),
+				 * height * 1.2f) + scroll,
 				width, height
 			};
 			const auto nameTex = data->nameTexture.GetTexture();
