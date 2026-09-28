@@ -160,15 +160,26 @@ SDL_Texture* LoadBMP(std::string file)
 	return tex;
 }
 
+std::tuple<int, int> GetScreenSize()
+{
+	auto arr = SDL_GetDisplays(nullptr);
+	if (not arr)
+		throw;
+	const SDL_DisplayMode* dm = SDL_GetCurrentDisplayMode(arr[0]);
+	SDL_free(arr);
+	return {dm->w, dm->h};
+}
+
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 {
-	auto _ = JsonWrapper("{\"kisu\":2}");
 	if (!SDL_CreateWindowAndRenderer(
 		    "Hello World", 800, 600,
 		    SDL_WINDOW_RESIZABLE, &window, &renderer)) {
 		logs(SDL_GetError());
 		return SDL_APP_FAILURE;
 	}
+	const auto [width, height] = GetScreenSize();
+	SDL_SetWindowSize(window, width, height);
 	TextWrapper::renderer = renderer;
 	if (!TTF_Init()) {
 		logs(SDL_GetError());
@@ -182,7 +193,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 	blueBorder = LoadBMP("blue.bmp");
 	greyBorder = LoadBMP("gray.bmp");
 	// Connect to a server
-	webSocket.setUrl(url);
+	//webSocket.setUrl(url);
 	logs("Connecting...");
 	// Setup a callback to be fired
 	// (in a background thread, watch out for race conditions !)
@@ -247,17 +258,29 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 		// Students
 		int screenWidth, screenHeight;
 		SDL_GetCurrentRenderOutputSize(renderer, &screenWidth, &screenHeight);
-		const float width = screenWidth / 5;
-		const float height = width / 2;
-		const int nStudents = students.size();
-		const float tHeight = SDL_ceil(nStudents / 3.f) * height * 1.2f;
+
+		const auto get = [&](const auto &self, int perRow) {
+			const float width = screenWidth / (perRow + 2);
+			const float height = width / 2;
+			const int nStudents = students.size();
+			const float tHeight = SDL_ceil(nStudents / float(perRow)) * height * 1.2f;
+			const float tWidth = (perRow * width * 1.2f)
+				- (width * .2f);
+			if (tHeight < screenHeight*0.9 or perRow >= 4)
+				return std::tuple{perRow, width, height, tHeight, tWidth};
+			else
+				return self(self, perRow+1);
+		};
+		const auto [perRow, width, height, tHeight, tWidth] = get(get,3);
+
 		int i = 0;
 		for (auto const& [id, data] :
 			     students) {
+			const float startX = (screenWidth - tWidth) / 2;
 			const SDL_FRect borderRect = {
-				(width*0.8f) + ((i%3) * width * 1.2f),
+				startX + ((i%perRow) * width * 1.2f),
 				((screenHeight - tHeight) / 2) +
-				(static_cast<float>(SDL_floor(i/3.f))
+				(static_cast<float>(SDL_floor(i/float(perRow)))
 				 * height * 1.2f),
 				width, height
 			};
