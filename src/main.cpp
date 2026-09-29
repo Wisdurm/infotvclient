@@ -304,7 +304,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 						       &borderRect);
 
 			// Text
-			const float fontScale = screenWidth / 1600.f;
+			const float fontScale = width / 350;
 			const float timeScale = fontScale * 0.8f;
 			const float textHeight = (nameTex->h * fontScale) +
 				(timeTex->h * timeScale);
