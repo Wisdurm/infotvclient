@@ -31,7 +31,7 @@ public:
 	{
 		SDL_assert_always(SDL_IsMainThread());
 		// If string already rendered
-		if (TextWrapper::cache.find(text) != TextWrapper::cache.end())
+		if (TextWrapper::cache.contains(text))
 			return;
 		// Otherwise
 		SDL_Texture* texture;
@@ -50,7 +50,7 @@ public:
 
 	SDL_Texture* GetTexture() const
 	{
-		if (TextWrapper::cache.find(text) == TextWrapper::cache.end())
+		if (not TextWrapper::cache.contains(text))
 			GenerateTexture();
 		auto& pair = TextWrapper::cache.at(text);
 		pair.second = std::chrono::system_clock::now();

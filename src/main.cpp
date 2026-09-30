@@ -4,7 +4,6 @@
 #include "SDL3/SDL_events.h"
 #include "SDL3/SDL_init.h"
 #include "SDL3/SDL_mouse.h"
-#include "SDL3/SDL_notification.h"
 #include "SDL3/SDL_pixels.h"
 #include "SDL3/SDL_render.h"
 #include "SDL3/SDL_stdinc.h"
@@ -52,13 +51,16 @@ static const std::string url = "ws://10.246.12.118:3000/ws";
 static ix::WebSocket webSocket;
 static std::forward_list<std::string> log;
 
+static int groupIdFilter = -1;
+
 void logs(std::string msg)
 {
 	log.push_front(msg);
 	SDL_Log("%s", msg.c_str());
 }
 
-struct Student {
+struct Student
+{
 	const TextWrapper nameTexture;
 	const TextWrapper remainingTexture;
 	const std::string name;
@@ -72,8 +74,7 @@ struct Student {
 			return std::format("{:%H t %M min }", time);
 		}(), {100,100,100,SDL_ALPHA_OPAQUE}),
 		status(status)
-	{
-	}
+	{ }
 };
 
 static std::unordered_map<int, std::unique_ptr<Student>> students;
@@ -125,10 +126,20 @@ void UpdateStudent(JsonValueWrapper value, bool notify = true)
 	if (remainingv.name() != "remaining")
 		return;
 	const int remaining = int(JsonValueWrapper(remainingv.value()));
+	// Group id
+	const auto groupIdv = obj[12];
+	if (groupIdv.name() != "group_id")
+		return;
+	const int groupId = int(JsonValueWrapper(remainingv.value()));
+	// If not in a group which we want to see, don't add
+	if (groupId != groupIdFilter)
+		return;
 	// Add object
-	students.insert({id, std::make_unique<Student>(name, remaining, status)});
+	students.insert({id,
+			std::make_unique<Student>(name, remaining, status)});
 	if (notify)
-	    notificationQueue.push_back(std::format("Päivitetty oppilas: {}", name));
+	    notificationQueue.push_back(
+		    std::format("Päivitetty oppilas: {}", name));
 }
 
 void ScanNew(JsonValueWrapper value)
@@ -142,7 +153,8 @@ void ScanNew(JsonValueWrapper value)
 	// Add object
 	if (auto f = students.find(id); f != students.end()) {
 		(*f).second->status = !((*f).second->status);
-		notificationQueue.push_back(std::format("Uusi skannaus: {}", (*f).second->name));
+		notificationQueue.push_back(
+			std::format("Uusi skannaus: {}", (*f).second->name));
 	}
 }
 
@@ -164,8 +176,8 @@ void onMessage(const ix::WebSocketMessagePtr& msg)
 			std::string(JsonValueWrapper(event.value()));
 		if (eventName == "students:update") {
 			// Get students
-			const auto values =
-				std::vector<JsonValueWrapper>(JsonValueWrapper(payload.value()));
+			const auto values = std::vector<JsonValueWrapper>(
+				JsonValueWrapper(payload.value()));
 			// Wait until rendered before modifying it
 			std::lock_guard<std::mutex> _(student_mutex);
 			students.clear();
@@ -221,16 +233,35 @@ std::tuple<int, int> GetScreenSize()
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 {
+	// Get groupid from args
+	if (argc > 1) {
+		try {
+			groupIdFilter = std::stoi(argv[1]);
+			logs(argv[1]);
+		} catch (std::exception& e) {
+			logs("Bad command line arguments");
+			return SDL_APP_FAILURE;
+		}
+	}
+
+	// Setup SDL
+
 	if (!SDL_CreateWindowAndRenderer(
-		    "Hello World", 800, 600,
-		    SDL_WINDOW_RESIZABLE, &window, &renderer)) {
+		    "Rfid display", 800, 600,
+		    SDL_WINDOW_RESIZABLE,
+		    &window, &renderer)) {
 		logs(SDL_GetError());
 		return SDL_APP_FAILURE;
 	}
 	SDL_HideCursor();
+	SDL_SetRenderVSync(renderer, 1);
+	SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+
 	const auto [width, height] = GetScreenSize();
 	SDL_SetWindowSize(window, width, height);
 	TextWrapper::renderer = renderer;
+
+	// SDL_TTF
 
 	if (!TTF_Init()) {
 		logs(SDL_GetError());
@@ -241,27 +272,33 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 		logs(SDL_GetError());
 		return SDL_APP_FAILURE;
 	}
+
+	// Textures
+
 	blueBorder = LoadBMP("blue.bmp");
 	greyBorder = LoadBMP("gray.bmp");
 	notification = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888,
-					 SDL_TEXTUREACCESS_TARGET, width, 100);
+					 SDL_TEXTUREACCESS_TARGET, width,
+					 100);
+
 	// Connect to a server
+
 	webSocket.setUrl(url);
 	logs("Connecting...");
+
 	// Setup a callback to be fired
 	// (in a background thread, watch out for race conditions !)
-	// when a message or an event (open, close, error) is received
 	webSocket.setOnMessageCallback(onMessage);
+
 	// Start thread
 	webSocket.start();
-	SDL_SetRenderVSync(renderer, 1);
+
 	return SDL_APP_CONTINUE;
 }
 
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 {
 	// Send a message to the server (default to TEXT mode)
-	//webSocket.send("hello world");
 	if (event->type == SDL_EVENT_QUIT) {
 		return SDL_APP_SUCCESS;
 	} else if (event->type == SDL_EVENT_KEY_DOWN) {
@@ -324,7 +361,6 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 	return SDL_APP_CONTINUE;
 }
 
-/* This function runs once per frame, and is the heart of the program. */
 SDL_AppResult SDL_AppIterate(void *appstate)
 {
 	// Do here to avoid multithreading problems
@@ -333,8 +369,9 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 		lastCleanup = std::chrono::system_clock::now();
 		TextWrapper::Cleanup();
 	}
+
 	// Use queue to avoid race-conditions since textures are going
-	// to be created on the main thread anyway so who cares
+	// to be deleted on the main thread anyway so who cares
 	for (auto const& msg : notificationQueue) {
 		Notify(msg);
 	}
@@ -342,25 +379,32 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 
 	if (not renderBuffer)
 		return SDL_APP_CONTINUE;
+
 	// Don't modify students while rendering it
 	if (student_mutex.try_lock()) {
-		SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+		// Render to renderBuffer; if mutex can't be locked because reasons
+		// then you can simply render the last renderBuffer
 		SDL_SetRenderTarget(renderer, renderBuffer);
+
 		// Background
 		SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
 		SDL_RenderClear(renderer);
+
 		// Debug log
-		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 		{
+			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 			int i = 0;
 			for (auto const&  msg : log) {
 				SDL_RenderDebugText(renderer, 0, i*10, msg.c_str());
 				i++;
 			}
 		}
+
 		// Students
 		int screenWidth, screenHeight;
 		SDL_GetCurrentRenderOutputSize(renderer, &screenWidth, &screenHeight);
+
+		// Position students
 
 		const auto get = [&](const auto &self, int perRow) {
 			const float width = screenWidth / (perRow + 2);
@@ -375,7 +419,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 				return self(self, perRow+1);
 		};
 		const auto [perRow, width, height, tHeight, tWidth] = get(get,3);
-		// moi
+
 		const float x = SDL_fmod(SDL_GetTicks() / 1000., 8.f);
 		const float f = ((x < 2) ? 0 :
 				 (x < 4) ? SDL_sin((x-2)*(SDL_PI_F / 4)) :
@@ -384,6 +428,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 				 0) - 0.5;
 		const float scroll = f * SDL_max((tHeight - screenHeight) * 1.1,0);
 
+		// Render students
 		int i = 0;
 		for (auto const& [id, data] :
 			     students) {
@@ -434,7 +479,8 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 					  nullptr, &timeRect);
 			i++;
 		}
-		// Notification
+
+		// Render notification
 		if (SDL_GetTicks() - notified < 3000) {
 			SDL_FRect dstrect = {
 				static_cast<float>((screenWidth-notification->w) / 2),
@@ -457,7 +503,6 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 	return SDL_APP_CONTINUE;
 }
 
-/* This function runs once at shutdown. */
 void SDL_AppQuit(void *appstate, SDL_AppResult result)
 {
 	SDL_DestroyTexture(blueBorder);
