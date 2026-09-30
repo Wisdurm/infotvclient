@@ -1,15 +1,15 @@
 #include <SDL3_ttf/SDL_ttf.h>
+#include "SDL3/SDL_assert.h"
 #include "SDL3/SDL_blendmode.h"
 #include "SDL3/SDL_events.h"
 #include "SDL3/SDL_init.h"
 #include "SDL3/SDL_mouse.h"
-#include "SDL3/SDL_oldnames.h"
+#include "SDL3/SDL_notification.h"
 #include "SDL3/SDL_pixels.h"
 #include "SDL3/SDL_render.h"
 #include "SDL3/SDL_stdinc.h"
 #include "SDL3/SDL_surface.h"
 #include "SDL3/SDL_video.h"
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <ixwebsocket/IXWebSocketMessage.h>
@@ -17,7 +17,6 @@
 #include <ixwebsocket/IXNetSystem.h>
 #include <ixwebsocket/IXWebSocket.h>
 #include <ixwebsocket/IXUserAgent.h>
-#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -45,7 +44,9 @@ static SDL_Texture* greyBorder;
 static uint64_t notified;
 static SDL_Texture* notification;
 
-static std::mutex mutex;
+static std::mutex student_mutex;
+
+static std::chrono::time_point<std::chrono::system_clock> lastCleanup;
 
 static const std::string url = "ws://10.246.12.118:3000/ws";
 static ix::WebSocket webSocket;
@@ -76,28 +77,27 @@ struct Student {
 };
 
 static std::unordered_map<int, std::unique_ptr<Student>> students;
+static std::list<std::string> notificationQueue;
 
 void Notify(std::string message)
 {
-	SDL_RunOnMainThread([](void* userdata){
-		std::string& message = *reinterpret_cast<std::string*>(userdata);
-		SDL_SetRenderTarget(renderer, notification);
-		SDL_SetRenderDrawColor(renderer, 255, 255, 255, SDL_ALPHA_OPAQUE);
-		SDL_RenderClear(renderer);
-		const auto t = TextWrapper(message,
-					   {0,0,0,SDL_ALPHA_OPAQUE});
-		const auto tex = t.GetTexture();
-		const SDL_FRect dstrect = {
-			static_cast<float>((notification->w - tex->w) / 2),
-			static_cast<float>((notification->h - tex->h) / 2),
-			static_cast<float>(tex->w),
-			static_cast<float>(tex->h)
-		};
-		SDL_RenderTexture(renderer, tex,
-				  nullptr, &dstrect);
-		SDL_SetRenderTarget(renderer, nullptr);
-		notified = SDL_GetTicks();
-	}, &message, true);
+	SDL_assert_always(SDL_IsMainThread());
+	SDL_SetRenderTarget(renderer, notification);
+	SDL_SetRenderDrawColor(renderer, 255, 255, 255, SDL_ALPHA_OPAQUE);
+	SDL_RenderClear(renderer);
+	const auto t = TextWrapper(message,
+				   {0,0,0,SDL_ALPHA_OPAQUE});
+	const auto tex = t.GetTexture();
+	const SDL_FRect dstrect = {
+		static_cast<float>((notification->w - tex->w) / 2),
+		static_cast<float>((notification->h - tex->h) / 2),
+		static_cast<float>(tex->w),
+		static_cast<float>(tex->h)
+	};
+	SDL_RenderTexture(renderer, tex,
+			  nullptr, &dstrect);
+	SDL_SetRenderTarget(renderer, nullptr);
+	notified = SDL_GetTicks();
 }
 
 void UpdateStudent(JsonValueWrapper value, bool notify = true)
@@ -128,7 +128,7 @@ void UpdateStudent(JsonValueWrapper value, bool notify = true)
 	// Add object
 	students.insert({id, std::make_unique<Student>(name, remaining, status)});
 	if (notify)
-	    Notify(std::format("Päivitetty oppilas: {}", name));
+	    notificationQueue.push_back(std::format("Päivitetty oppilas: {}", name));
 }
 
 void ScanNew(JsonValueWrapper value)
@@ -142,7 +142,7 @@ void ScanNew(JsonValueWrapper value)
 	// Add object
 	if (auto f = students.find(id); f != students.end()) {
 		(*f).second->status = !((*f).second->status);
-		Notify(std::format("Uusi skannaus: {}", (*f).second->name));
+		notificationQueue.push_back(std::format("Uusi skannaus: {}", (*f).second->name));
 	}
 }
 
@@ -167,19 +167,19 @@ void onMessage(const ix::WebSocketMessagePtr& msg)
 			const auto values =
 				std::vector<JsonValueWrapper>(JsonValueWrapper(payload.value()));
 			// Wait until rendered before modifying it
-			std::lock_guard<std::mutex> _(mutex);
+			std::lock_guard<std::mutex> _(student_mutex);
 			students.clear();
 			for (auto value : values) {
 				UpdateStudent(value, false);
 			}
 		} else if (eventName == "student:update") {
-			std::lock_guard<std::mutex> _(mutex);
+			std::lock_guard<std::mutex> _(student_mutex);
 			UpdateStudent(JsonValueWrapper(payload.value()));
 		} else if (eventName == "student:new") {
-			std::lock_guard<std::mutex> _(mutex);
+			std::lock_guard<std::mutex> _(student_mutex);
 			UpdateStudent(JsonValueWrapper(payload.value()));
 		} else if (eventName == "scan:new") {
-			std::lock_guard<std::mutex> _(mutex);
+			std::lock_guard<std::mutex> _(student_mutex);
 			ScanNew(JsonValueWrapper(payload.value()));
 		} else {
 			logs("Unrecognized event: " + msg->str);
@@ -231,6 +231,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 	const auto [width, height] = GetScreenSize();
 	SDL_SetWindowSize(window, width, height);
 	TextWrapper::renderer = renderer;
+
 	if (!TTF_Init()) {
 		logs(SDL_GetError());
 		return SDL_APP_FAILURE;
@@ -253,6 +254,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 	webSocket.setOnMessageCallback(onMessage);
 	// Start thread
 	webSocket.start();
+	SDL_SetRenderVSync(renderer, 1);
 	return SDL_APP_CONTINUE;
 }
 
@@ -265,7 +267,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 	} else if (event->type == SDL_EVENT_KEY_DOWN) {
 		switch (event->key.key) {
 		case SDLK_D: {
-			students.erase(students.begin());
+			if (students.size() > 0)
+				students.erase(students.begin());
 			break;
 		}
 		case SDLK_A: {
@@ -273,7 +276,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 				std::this_thread::sleep_for(std::chrono::seconds(2));
 			});
 			t.join();
-			Notify("asd");
+			notificationQueue.push_back("asd");
 			break;
 		}
 		case SDLK_S: {
@@ -298,11 +301,11 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 			students.insert(
 				{126, std::make_unique<Student>
 				 ("pissa", 20000, true)});
-			Notify("moi");
+			notificationQueue.push_back("moi");
 			break;
 		}
 		default: {
-			Notify(std::format("moi {}", event->key.raw));
+			notificationQueue.push_back(std::format("moi {}", event->key.raw));
 			students.insert(
 				{event->key.raw, std::make_unique<Student>
 				 ("Jääskän poika", 20000, true)});
@@ -324,10 +327,23 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 /* This function runs once per frame, and is the heart of the program. */
 SDL_AppResult SDL_AppIterate(void *appstate)
 {
+	// Do here to avoid multithreading problems
+	if (std::chrono::system_clock::now() - lastCleanup
+	    > std::chrono::seconds(10)) {
+		lastCleanup = std::chrono::system_clock::now();
+		TextWrapper::Cleanup();
+	}
+	// Use queue to avoid race-conditions since textures are going
+	// to be created on the main thread anyway so who cares
+	for (auto const& msg : notificationQueue) {
+		Notify(msg);
+	}
+	notificationQueue.clear();
+
 	if (not renderBuffer)
 		return SDL_APP_CONTINUE;
 	// Don't modify students while rendering it
-	if (mutex.try_lock()) {
+	if (student_mutex.try_lock()) {
 		SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 		SDL_SetRenderTarget(renderer, renderBuffer);
 		// Background
@@ -433,7 +449,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 					  nullptr, &dstrect);
 		}
 		SDL_SetRenderTarget(renderer, nullptr);
-		mutex.unlock();
+		student_mutex.unlock();
 	}
 	// Present
 	SDL_RenderTexture(renderer, renderBuffer, nullptr, nullptr);
@@ -447,7 +463,7 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result)
 	SDL_DestroyTexture(blueBorder);
 	SDL_DestroyTexture(greyBorder);
 	SDL_DestroyTexture(notification);
-	TextWrapper::CleanCache();
+	TextWrapper::ClearCache();
 	if (font)
 		TTF_CloseFont(font);
 	TTF_Quit();
