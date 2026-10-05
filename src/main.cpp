@@ -44,6 +44,7 @@ static uint64_t notified;
 static SDL_Texture* notification;
 
 static std::mutex student_mutex;
+static std::mutex queue_mutex;
 
 static std::chrono::time_point<std::chrono::system_clock> lastCleanup;
 
@@ -90,8 +91,8 @@ void Notify(std::string message)
 				   {0,0,0,SDL_ALPHA_OPAQUE});
 	const auto tex = t.GetTexture();
 	const SDL_FRect dstrect = {
-		static_cast<float>((notification->w - tex->w) / 2),
-		static_cast<float>((notification->h - tex->h) / 2),
+		static_cast<float>((notification->w - tex->w) / 2.),
+		static_cast<float>((notification->h - tex->h) / 2.),
 		static_cast<float>(tex->w),
 		static_cast<float>(tex->h)
 	};
@@ -101,7 +102,7 @@ void Notify(std::string message)
 	notified = SDL_GetTicks();
 }
 
-void UpdateStudent(JsonValueWrapper value, bool notify = true)
+void UpdateStudent(JsonValueWrapper value)
 {
 	const auto obj = JsonObjectWrapper(value);
 	// Id
@@ -130,28 +131,28 @@ void UpdateStudent(JsonValueWrapper value, bool notify = true)
 	const auto groupIdv = obj[12];
 	if (groupIdv.name() != "group_id")
 		return;
-	const int groupId = int(JsonValueWrapper(remainingv.value()));
-	// If not in a group which we want to see, don't add
+	const int groupId = int(JsonValueWrapper(groupIdv.value()));
+	// If not in the group which we want to see, don't add
 	if (groupId != groupIdFilter)
 		return;
 	// Add object
+	if (students.contains(id))
+		students.erase(id);
 	students.insert({id,
 			std::make_unique<Student>(name, remaining, status)});
-	if (notify)
-	    notificationQueue.push_back(
-		    std::format("Päivitetty oppilas: {}", name));
 }
 
 void ScanNew(JsonValueWrapper value)
 {
 	const auto obj = JsonObjectWrapper(value);
 	// Id
-	auto idv = obj[3];
+	auto idv = obj[4];
 	if (idv.name() != "student_id")
 		return;
 	const int id = int(JsonValueWrapper(idv.value()));
 	// Add object
-	if (auto f = students.find(id); f != students.end()) {
+	std::lock_guard<std::mutex> _(queue_mutex);
+	if (auto const& f = students.find(id); f != students.end()) {
 		(*f).second->status = !((*f).second->status);
 		notificationQueue.push_back(
 			std::format("Uusi skannaus: {}", (*f).second->name));
@@ -182,7 +183,7 @@ void onMessage(const ix::WebSocketMessagePtr& msg)
 			std::lock_guard<std::mutex> _(student_mutex);
 			students.clear();
 			for (auto value : values) {
-				UpdateStudent(value, false);
+				UpdateStudent(value);
 			}
 		} else if (eventName == "student:update") {
 			std::lock_guard<std::mutex> _(student_mutex);
@@ -301,7 +302,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 	// Send a message to the server (default to TEXT mode)
 	if (event->type == SDL_EVENT_QUIT) {
 		return SDL_APP_SUCCESS;
-	} else if (event->type == SDL_EVENT_KEY_DOWN) {
+	}
+	else if (event->type == SDL_EVENT_KEY_DOWN) {
 		switch (event->key.key) {
 		case SDLK_D: {
 			if (students.size() > 0)
@@ -313,6 +315,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 				std::this_thread::sleep_for(std::chrono::seconds(2));
 			});
 			t.join();
+			std::lock_guard<std::mutex> _(queue_mutex);
 			notificationQueue.push_back("asd");
 			break;
 		}
@@ -338,10 +341,12 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 			students.insert(
 				{126, std::make_unique<Student>
 				 ("pissa", 20000, true)});
+			std::lock_guard<std::mutex> _(queue_mutex);
 			notificationQueue.push_back("moi");
 			break;
 		}
 		default: {
+			std::lock_guard<std::mutex> _(queue_mutex);
 			notificationQueue.push_back(std::format("moi {}", event->key.raw));
 			students.insert(
 				{event->key.raw, std::make_unique<Student>
@@ -365,17 +370,20 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 {
 	// Do here to avoid multithreading problems
 	if (std::chrono::system_clock::now() - lastCleanup
-	    > std::chrono::seconds(10)) {
+	    > std::chrono::seconds(30)) {
 		lastCleanup = std::chrono::system_clock::now();
 		TextWrapper::Cleanup();
 	}
 
 	// Use queue to avoid race-conditions since textures are going
 	// to be deleted on the main thread anyway so who cares
-	for (auto const& msg : notificationQueue) {
-		Notify(msg);
+	if (queue_mutex.try_lock()) {
+		for (auto const& msg : notificationQueue) {
+			Notify(msg);
+		}
+		notificationQueue.clear();
+		queue_mutex.unlock();
 	}
-	notificationQueue.clear();
 
 	if (not renderBuffer)
 		return SDL_APP_CONTINUE;

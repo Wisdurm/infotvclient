@@ -27,6 +27,11 @@ public:
 	TextWrapper(std::string text, SDL_Color colour) : text(text), colour(colour)
 	{}
 
+	static size_t GetSize()
+	{
+		return cache.size();
+	}
+
 	void GenerateTexture() const
 	{
 		SDL_assert_always(SDL_IsMainThread());
@@ -64,7 +69,7 @@ public:
 		CacheType::iterator it = cache.begin();
 		while (it != cache.end()) {
 			if (std::chrono::system_clock::now() - it->second.second
-			    > std::chrono::seconds(3)) {
+			    > std::chrono::seconds(15)) {
 				SDL_DestroyTexture(it->second.first);
 				it = cache.erase(it);
 			} else {
