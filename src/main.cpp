@@ -32,6 +32,8 @@
 #include "json.hpp"
 #include "text.hpp"
 
+//#define DEBUG
+
 static SDL_Window *window = NULL;
 static SDL_Renderer *renderer = NULL;
 
@@ -50,13 +52,18 @@ static std::chrono::time_point<std::chrono::system_clock> lastCleanup;
 
 static const std::string url = "ws://10.246.12.118:3000/ws";
 static ix::WebSocket webSocket;
+
+#ifdef DEBUG
 static std::forward_list<std::string> log;
+#endif
 
 static int groupIdFilter = -1;
 
 void logs(std::string msg)
 {
+#ifdef DEBUG
 	log.push_front(msg);
+#endif
 	SDL_Log("%s", msg.c_str());
 }
 
@@ -163,7 +170,9 @@ void onMessage(const ix::WebSocketMessagePtr& msg)
 {
 	switch (msg->type) {
 	case ix::WebSocketMessageType::Message: {
+#ifdef DEBUG
 		logs("Msg: " + msg->str);
+#endif
 		// TODO: erorr hand
 		const JsonWrapper json(msg->str);
 		const auto object = json.object();
@@ -195,7 +204,9 @@ void onMessage(const ix::WebSocketMessagePtr& msg)
 			std::lock_guard<std::mutex> _(student_mutex);
 			ScanNew(JsonValueWrapper(payload.value()));
 		} else {
+#ifdef DEBUG
 			logs("Unrecognized event: " + msg->str);
+#endif
 		}
 		break;
 	}
@@ -303,6 +314,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 	if (event->type == SDL_EVENT_QUIT) {
 		return SDL_APP_SUCCESS;
 	}
+#ifdef DEBUG
 	else if (event->type == SDL_EVENT_KEY_DOWN) {
 		switch (event->key.key) {
 		case SDLK_D: {
@@ -354,7 +366,9 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 			break;
 		}
 		}
-	} else if (event->type == SDL_EVENT_WINDOW_RESIZED) {
+	}
+#endif
+	else if (event->type == SDL_EVENT_WINDOW_RESIZED) {
 		int w, h;
 		SDL_GetWindowSize(SDL_GetWindowFromEvent(event), &w, &h);
 		if (renderBuffer)
@@ -398,6 +412,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 		SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
 		SDL_RenderClear(renderer);
 
+#ifdef DEBUG
 		// Debug log
 		{
 			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
@@ -407,6 +422,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 				i++;
 			}
 		}
+#endif
 
 		// Students
 		int screenWidth, screenHeight;
