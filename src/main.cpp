@@ -1,4 +1,6 @@
-#include <SDL3_ttf/SDL_ttf.h>
+#define SDL_MAIN_USE_CALLBACKS 1  /* use the callbacks instead of main() */
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_main.h>
 #include "SDL3/SDL_assert.h"
 #include "SDL3/SDL_blendmode.h"
 #include "SDL3/SDL_events.h"
@@ -9,26 +11,26 @@
 #include "SDL3/SDL_stdinc.h"
 #include "SDL3/SDL_surface.h"
 #include "SDL3/SDL_video.h"
-#include <cstddef>
-#include <cstdint>
+#include <SDL3_ttf/SDL_ttf.h>
+
 #include <ixwebsocket/IXWebSocketMessage.h>
 #include <ixwebsocket/IXWebSocketMessageType.h>
 #include <ixwebsocket/IXNetSystem.h>
 #include <ixwebsocket/IXWebSocket.h>
 #include <ixwebsocket/IXUserAgent.h>
-#include <string>
-#include <thread>
-#include <vector>
-#define SDL_MAIN_USE_CALLBACKS 1  /* use the callbacks instead of main() */
-#include <SDL3/SDL.h>
-#include <SDL3/SDL_main.h>
-#include <forward_list>
-#include <unordered_map>
+
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
+
+#include <unordered_map>
 #include <memory>
 #include <mutex>
 #include <format>
 #include <chrono>
+#include <string>
+#include <vector>
+
 #include "json.hpp"
 #include "text.hpp"
 
@@ -211,12 +213,25 @@ void onMessage(const ix::WebSocketMessagePtr& msg)
 		break;
 	}
 	case ix::WebSocketMessageType::Open: {
+		notificationQueue.push_back("Yhteys muodostettu");
 		logs("Connected");
 		break;
 	}
+	case ix::WebSocketMessageType::Close: {
+		notificationQueue.push_back("Yhteys katkaistu");
+		logs("Connection closed");
+
+		std::lock_guard<std::mutex> _(student_mutex);
+		students.clear();
+		break;
+	}
 	case ix::WebSocketMessageType::Error: {
+		notificationQueue.push_back("Yhteys virhe");
 		// Maybe SSL is not configured properly
 		logs("Connection error: " + msg->errorInfo.reason);
+
+		std::lock_guard<std::mutex> _(student_mutex);
+		students.clear();
 		break;
 	}
 	default:
@@ -478,7 +493,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 
 			// Text
 			const float fontScale = [&](float size){
-				return (nameTex->w * size > width) ? size/1.2
+				return (nameTex->w * size > width*0.9) ? size/1.2
 					: size;
 			}(width / 350);
 			const float timeScale = fontScale * 0.8f;

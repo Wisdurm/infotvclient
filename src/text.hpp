@@ -1,14 +1,13 @@
 #include "SDL3/SDL_assert.h"
 #include "SDL3/SDL_init.h"
 #include "SDL3/SDL_render.h"
-#include <SDL3_ttf/SDL_ttf.h>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
-#include <functional>
+#include <SDL3_ttf/SDL_ttf.h>
+
 #include <string>
 #include <unordered_map>
 #include <chrono>
-#include <vector>
 
 inline TTF_Font *font = NULL;
 
