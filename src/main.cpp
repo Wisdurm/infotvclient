@@ -36,6 +36,7 @@
 #include "toml.hpp"
 
 //#define DEBUG
+//#include <forward_list>
 
 static SDL_Window *window = NULL;
 static SDL_Renderer *renderer = NULL;
@@ -57,7 +58,7 @@ static std::string url;
 static ix::WebSocket webSocket;
 
 #ifdef DEBUG
-static std::forward_list<std::string> log;
+static std::forward_list<std::string> logList;
 #endif
 
 static int groupIdFilter = -1;
@@ -65,7 +66,7 @@ static int groupIdFilter = -1;
 void logs(std::string msg)
 {
 #ifdef DEBUG
-	log.push_front(msg);
+	logList.push_front(msg);
 #endif
 	SDL_Log("%s", msg.c_str());
 }
@@ -451,7 +452,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 		{
 			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 			int i = 0;
-			for (auto const&  msg : log) {
+			for (auto const&  msg : logList) {
 				SDL_RenderDebugText(renderer, 0, i*10, msg.c_str());
 				i++;
 			}
