@@ -264,17 +264,23 @@ std::tuple<int, int> GetScreenSize()
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 {
 	// Get args
-	auto config = toml::parse_file( "../config.toml" );
-	try {
-		if (auto v = config["tv"]["group_filter"].value<int>())
-			groupIdFilter = v.value();
-		logs(std::to_string(groupIdFilter));
-		if (auto v = config["tv"]["websocket_location"].value<std::string>())
-			url = v.value();
-		logs(url);
-	} catch (std::exception& e) {
-		logs("Bad arguments");
-		return SDL_APP_FAILURE;
+	{
+		const auto config =
+			toml::parse_file( "../config.toml" );
+		const auto f =
+			config["tv"]["group_filter"].value_exact<int64_t>();
+		const auto l =
+			config["server_addr"].value_exact<std::string>();
+		if (f and l) {
+			groupIdFilter = f.value();
+#ifdef DEBUG
+			logs(std::to_string(groupIdFilter));
+			logs(l.value());
+#endif
+		} else {
+			logs("Bad arguments");
+			return SDL_APP_FAILURE;
+		}
 	}
 
 	// Setup SDL
