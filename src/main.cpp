@@ -53,7 +53,7 @@ static std::mutex queue_mutex;
 
 static std::chrono::time_point<std::chrono::system_clock> lastCleanup;
 
-static const std::string url = "ws://10.246.12.118:3000/ws";
+static std::string url;
 static ix::WebSocket webSocket;
 
 #ifdef DEBUG
@@ -269,6 +269,9 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 		if (auto v = config["tv"]["group_filter"].value<int>())
 			groupIdFilter = v.value();
 		logs(std::to_string(groupIdFilter));
+		if (auto v = config["tv"]["websocket_location"].value<std::string>())
+			url = v.value();
+		logs(url);
 	} catch (std::exception& e) {
 		logs("Bad arguments");
 		return SDL_APP_FAILURE;
