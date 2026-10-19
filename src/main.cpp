@@ -33,6 +33,7 @@
 
 #include "json.hpp"
 #include "text.hpp"
+#include "toml.hpp"
 
 //#define DEBUG
 
@@ -235,7 +236,9 @@ void onMessage(const ix::WebSocketMessagePtr& msg)
 		break;
 	}
 	default:
+#ifdef DEBUG
 		logs("Who knows!");
+#endif
 		break;
 	}
 }
@@ -260,15 +263,15 @@ std::tuple<int, int> GetScreenSize()
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 {
-	// Get groupid from args
-	if (argc > 1) {
-		try {
-			groupIdFilter = std::stoi(argv[1]);
-			logs(argv[1]);
-		} catch (std::exception& e) {
-			logs("Bad command line arguments");
-			return SDL_APP_FAILURE;
-		}
+	// Get args
+	auto config = toml::parse_file( "../config.toml" );
+	try {
+		if (auto v = config["tv"]["group_filter"].value<int>())
+			groupIdFilter = v.value();
+		logs(std::to_string(groupIdFilter));
+	} catch (std::exception& e) {
+		logs("Bad arguments");
+		return SDL_APP_FAILURE;
 	}
 
 	// Setup SDL
@@ -374,7 +377,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 		}
 		default: {
 			std::lock_guard<std::mutex> _(queue_mutex);
-			notificationQueue.push_back(std::format("moi {}", event->key.raw));
+			notificationQueue.push_back(std::format("moi {}",
+								event->key.raw));
 			students.insert(
 				{event->key.raw, std::make_unique<Student>
 				 ("Jääskän poika", 20000, true)});
@@ -414,8 +418,12 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 		queue_mutex.unlock();
 	}
 
-	if (not renderBuffer)
-		return SDL_APP_CONTINUE;
+	if (not renderBuffer) {
+		int w, h;
+		SDL_GetCurrentRenderOutputSize(renderer, &w, &h);
+		renderBuffer = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_XRGB8888,
+						 SDL_TEXTUREACCESS_TARGET, w, h);
+	}
 
 	// Don't modify students while rendering it
 	if (student_mutex.try_lock()) {
