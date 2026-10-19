@@ -270,9 +270,11 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 		const auto f =
 			config["tv"]["group_filter"].value_exact<int64_t>();
 		const auto l =
-			config["server_addr"].value_exact<std::string>();
+			config["server_address"].value_exact<std::string>();
 		if (f and l) {
 			groupIdFilter = f.value();
+			url = std::format("ws://{}:3000/ws",
+					  l.value());
 #ifdef DEBUG
 			logs(std::to_string(groupIdFilter));
 			logs(l.value());
