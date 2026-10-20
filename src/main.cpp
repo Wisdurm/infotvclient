@@ -1,3 +1,4 @@
+#include <system_error>
 #define SDL_MAIN_USE_CALLBACKS 1  /* use the callbacks instead of main() */
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -334,6 +335,25 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 
 	// Start thread
 	webSocket.start();
+
+	// Set fullscreen proper
+	{
+		auto did = SDL_GetPrimaryDisplay();
+		int count;
+		SDL_DisplayMode** arr = SDL_GetFullscreenDisplayModes(did, &count);
+		const SDL_DisplayMode* desiredMode = nullptr;
+		for (int i = 0; i < count; i++) {
+			if (arr[i]->w == 1920 && arr[i]->h == 1080) {
+				desiredMode = arr[i];
+				break;
+			}
+		}
+		if (not desiredMode or
+		    not SDL_SetWindowFullscreenMode(window, desiredMode))
+			throw;
+
+		SDL_free(arr);
+	}
 
 	return SDL_APP_CONTINUE;
 }
