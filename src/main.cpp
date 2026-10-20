@@ -349,7 +349,8 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 			}
 		}
 		if (not desiredMode or
-		    not SDL_SetWindowFullscreenMode(window, desiredMode))
+		    not SDL_SetWindowFullscreenMode(window, desiredMode) or
+		    not SDL_SetWindowFullscreen(window, true))
 			throw;
 
 		SDL_free(arr);
