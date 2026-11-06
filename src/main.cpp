@@ -31,44 +31,39 @@
 #include <chrono>
 #include <string>
 #include <vector>
+#include <forward_list>
 
 #include "json.hpp"
 #include "text.hpp"
 #include "toml.hpp"
 
-//#define DEBUG
-//#include <forward_list>
-
+// SDL
 static SDL_Window *window = NULL;
 static SDL_Renderer *renderer = NULL;
-
 static SDL_Texture* renderBuffer;
 
+// Textures
 static SDL_Texture* blueBorder;
 static SDL_Texture* greyBorder;
-
-static uint64_t notified;
 static SDL_Texture* notification;
+static std::chrono::time_point<std::chrono::system_clock> lastCleanup;
 
+// Mutexes
 static std::mutex student_mutex;
 static std::mutex queue_mutex;
 
-static std::chrono::time_point<std::chrono::system_clock> lastCleanup;
-
+// Program
+static uint64_t notified;
 static std::string url;
 static ix::WebSocket webSocket;
-
-#ifdef DEBUG
-static std::forward_list<std::string> logList;
-#endif
-
 static int groupIdFilter = -1;
+static bool debug = false;
+
+static std::forward_list<std::string> logList;
 
 void logs(std::string msg)
 {
-#ifdef DEBUG
 	logList.push_front(msg);
-#endif
 	SDL_Log("%s", msg.c_str());
 }
 
@@ -81,9 +76,11 @@ struct Student
 
 	Student(std::string name, int remaining, bool status) :
 		name(name),
-		nameTexture(TextWrapper(name, {0,0,0,SDL_ALPHA_OPAQUE})),
+		nameTexture(TextWrapper(name,
+					{0,0,0,SDL_ALPHA_OPAQUE})),
 		remainingTexture([&remaining]{
-			auto time {std::chrono::seconds(remaining)};
+			auto time
+				{std::chrono::seconds(remaining)};
 			return std::format("{:%H t %M min }", time);
 		}(), {100,100,100,SDL_ALPHA_OPAQUE}),
 		status(status)
@@ -175,9 +172,8 @@ void onMessage(const ix::WebSocketMessagePtr& msg)
 {
 	switch (msg->type) {
 	case ix::WebSocketMessageType::Message: {
-#ifdef DEBUG
-		logs("Msg: " + msg->str);
-#endif
+		if (debug)
+			logs("Msg: " + msg->str);
 		// TODO: erorr hand
 		const JsonWrapper json(msg->str);
 		const auto object = json.object();
@@ -209,9 +205,8 @@ void onMessage(const ix::WebSocketMessagePtr& msg)
 			std::lock_guard<std::mutex> _(student_mutex);
 			ScanNew(JsonValueWrapper(payload.value()));
 		} else {
-#ifdef DEBUG
-			logs("Unrecognized event: " + msg->str);
-#endif
+			if (debug)
+				logs("Unrecognized event: " + msg->str);
 		}
 		break;
 	}
@@ -238,9 +233,8 @@ void onMessage(const ix::WebSocketMessagePtr& msg)
 		break;
 	}
 	default:
-#ifdef DEBUG
-		logs("Who knows!");
-#endif
+		if (debug)
+			logs("Unrecognized ix thing");
 		break;
 	}
 }
@@ -269,22 +263,28 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 	{
 		const auto config =
 			toml::parse_file( "../config.toml" );
-		const auto f =
+		const auto filt =
 			config["tv"]["group_filter"].value_exact<int64_t>();
-		const auto l =
+		const auto link =
 			config["server_address"].value_exact<std::string>();
-		if (f and l) {
-			groupIdFilter = f.value();
+		if (filt and link) {
+			groupIdFilter = filt.value();
 			url = std::format("ws://{}:3000/ws",
-					  l.value());
-#ifdef DEBUG
-			logs(std::to_string(groupIdFilter));
-			logs(l.value());
-#endif
+					  link.value());
+			if (debug) {
+				logs(std::to_string(groupIdFilter));
+				logs(link.value());
+			}
 		} else {
 			logs("Bad arguments");
 			return SDL_APP_FAILURE;
 		}
+	}
+
+	if (argc > 1) {
+		const auto arg = std::string(argv[1]);
+		if (arg == "-d" or arg == "--debug")
+			debug = true;
 	}
 
 	// Setup SDL
@@ -340,7 +340,8 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 	{
 		auto did = SDL_GetPrimaryDisplay();
 		int count;
-		SDL_DisplayMode** arr = SDL_GetFullscreenDisplayModes(did, &count);
+		SDL_DisplayMode** arr =
+			SDL_GetFullscreenDisplayModes(did, &count);
 		const SDL_DisplayMode* desiredMode = nullptr;
 		for (int i = 0; i < count; i++) {
 			if (arr[i]->w == 1920 && arr[i]->h == 1080) {
@@ -365,8 +366,17 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 	if (event->type == SDL_EVENT_QUIT) {
 		return SDL_APP_SUCCESS;
 	}
-#ifdef DEBUG
-	else if (event->type == SDL_EVENT_KEY_DOWN) {
+	else if (event->type == SDL_EVENT_WINDOW_RESIZED) {
+		int w, h;
+		SDL_GetWindowSize(SDL_GetWindowFromEvent(event), &w, &h);
+		if (renderBuffer)
+			SDL_DestroyTexture(renderBuffer);
+		renderBuffer =
+			SDL_CreateTexture(renderer, SDL_PIXELFORMAT_XRGB8888,
+					  SDL_TEXTUREACCESS_TARGET, w, h);
+	} else if (not debug) {
+		return SDL_APP_CONTINUE;
+	} else if (event->type == SDL_EVENT_KEY_DOWN) {
 		switch (event->key.key) {
 		case SDLK_D: {
 			if (students.size() > 0)
@@ -375,7 +385,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 		}
 		case SDLK_A: {
 			std::thread t([]{
-				std::this_thread::sleep_for(std::chrono::seconds(2));
+				std::this_thread::sleep_for(
+					std::chrono::seconds(2));
 			});
 			t.join();
 			std::lock_guard<std::mutex> _(queue_mutex);
@@ -394,7 +405,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 				 ("Ville", 20000, true)});
 			students.insert(
 				{123, std::make_unique<Student>
-				 ("Etuliitteen nussija", 20000, true)});
+				 ("Etuliitteen halaaja",
+				  20000, true)});
 			students.insert(
 				{124, std::make_unique<Student>
 				 ("Killed", 20000, true)});
@@ -403,7 +415,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 				 ("Jääskänf poika", 20000, true)});
 			students.insert(
 				{126, std::make_unique<Student>
-				 ("pissa", 20000, true)});
+				 ("kissa", 20000, true)});
 			std::lock_guard<std::mutex> _(queue_mutex);
 			notificationQueue.push_back("moi");
 			break;
@@ -418,16 +430,6 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 			break;
 		}
 		}
-	}
-#endif
-	else if (event->type == SDL_EVENT_WINDOW_RESIZED) {
-		int w, h;
-		SDL_GetWindowSize(SDL_GetWindowFromEvent(event), &w, &h);
-		if (renderBuffer)
-			SDL_DestroyTexture(renderBuffer);
-		renderBuffer =
-			SDL_CreateTexture(renderer, SDL_PIXELFORMAT_XRGB8888,
-					  SDL_TEXTUREACCESS_TARGET, w, h);
 	}
 	return SDL_APP_CONTINUE;
 }
@@ -454,7 +456,8 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 	if (not renderBuffer) {
 		int w, h;
 		SDL_GetCurrentRenderOutputSize(renderer, &w, &h);
-		renderBuffer = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_XRGB8888,
+		renderBuffer = SDL_CreateTexture(renderer,
+						 SDL_PIXELFORMAT_XRGB8888,
 						 SDL_TEXTUREACCESS_TARGET, w, h);
 	}
 
@@ -468,8 +471,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 		SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
 		SDL_RenderClear(renderer);
 
-#ifdef DEBUG
-		// Debug log
+		if (debug)
 		{
 			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 			int i = 0;
@@ -478,7 +480,6 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 				i++;
 			}
 		}
-#endif
 
 		// Students
 		int screenWidth, screenHeight;
@@ -488,7 +489,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 
 		const auto get = [&](const auto &self, int perRow) {
 			const float width = screenWidth / (perRow + 2);
-			const float height = width / 2;
+			const float height = width / 2.2;
 			const int nStudents = students.size();
 			const float tHeight = SDL_ceil(nStudents / float(perRow)) * height * 1.2f;
 			const float tWidth = (perRow * width * 1.2f)
@@ -542,8 +543,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 				(timeTex->h * timeScale);
 			// Name
 			const SDL_FRect nameRect = {
-				borderRect.x
-				+ ((borderRect.w - (nameTex->w*fontScale)) / 2),
+				borderRect.x + borderRect.w/10,
 				borderRect.y
 				+ ((borderRect.h - textHeight) / 2),
 				static_cast<float>(nameTex->w*fontScale),
