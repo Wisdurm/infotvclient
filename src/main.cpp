@@ -269,7 +269,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 			config["server_address"].value_exact<std::string>();
 		if (filt and link) {
 			groupIdFilter = filt.value();
-			url = std::format("ws://{}:3000/ws",
+			url = std::format("ws://{}/ws",
 					  link.value());
 			if (debug) {
 				logs(std::to_string(groupIdFilter));
