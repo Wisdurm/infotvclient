@@ -146,8 +146,10 @@ void UpdateStudent(JsonValueWrapper value)
 		return;
 	// Add object
 	if (students.contains(id))
-		students.erase(id);
-	students.insert({id,
+		students.at(id) =
+			std::make_unique<Student>(name, remaining, status);
+	else
+		students.insert({id,
 			std::make_unique<Student>(name, remaining, status)});
 }
 
@@ -162,7 +164,6 @@ void ScanNew(JsonValueWrapper value)
 	// Add object
 	std::lock_guard<std::mutex> _(queue_mutex);
 	if (auto const& f = students.find(id); f != students.end()) {
-		(*f).second->status = !((*f).second->status);
 		notificationQueue.push_back(
 			std::format("Uusi skannaus: {}", (*f).second->name));
 	}
