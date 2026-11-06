@@ -138,7 +138,7 @@ void UpdateStudent(JsonValueWrapper value)
 	const int remaining = int(JsonValueWrapper(remainingv.value()));
 	// Group id
 	const auto groupIdv = obj[12];
-	if (groupIdv.name() != "group_id")
+	if (groupIdv.name() != "groupId")
 		return;
 	const int groupId = int(JsonValueWrapper(groupIdv.value()));
 	// If not in the group which we want to see, don't add
@@ -156,7 +156,7 @@ void ScanNew(JsonValueWrapper value)
 	const auto obj = JsonObjectWrapper(value);
 	// Id
 	auto idv = obj[4];
-	if (idv.name() != "student_id")
+	if (idv.name() != "studentId")
 		return;
 	const int id = int(JsonValueWrapper(idv.value()));
 	// Add object
